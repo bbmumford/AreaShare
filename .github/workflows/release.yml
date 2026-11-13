@@ -1,0 +1,108 @@
+name: Release
+
+# Pushing a tag such as v1.4.2 builds both apps, stamps them with that
+# version, and publishes them as a GitHub release. The macOS app looks at the
+# latest release to find its updates, so publishing here is what ships one.
+
+on:
+  push:
+    tags: ["v[0-9]+.[0-9]+.[0-9]+"]
+
+permissions:
+  contents: write
+
+jobs:
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Test
+        working-directory: macos
+        run: swift test
+
+      # Every release is signed with the same self-signed key. macOS ties the
+      # Screen Recording permission to the signature, and the app only
+      # installs updates signed like itself, so the key must not change
+      # between releases.
+      - name: Import the signing identity
+        env:
+          P12: ${{ secrets.MACOS_SIGNING_P12 }}
+          P12_PASSWORD: ${{ secrets.MACOS_SIGNING_PASSWORD }}
+        run: |
+          if [ -z "$P12" ]; then
+            echo "error: the MACOS_SIGNING_P12 secret is not set; a release must be signed with the release key." >&2
+            exit 1
+          fi
+          keychain="$RUNNER_TEMP/signing.keychain-db"
+          keychain_password="$(openssl rand -hex 16)"
+          echo "$P12" | base64 --decode > "$RUNNER_TEMP/identity.p12"
+          security create-keychain -p "$keychain_password" "$keychain"
+          security set-keychain-settings -lut 3600 "$keychain"
+          security unlock-keychain -p "$keychain_password" "$keychain"
+          security import "$RUNNER_TEMP/identity.p12" -k "$keychain" -P "$P12_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$keychain_password" "$keychain" >/dev/null
+          security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
+          rm "$RUNNER_TEMP/identity.p12"
+
+      - name: Build and sign
+        working-directory: macos
+        env:
+          AREASHARE_BUILD_DIR: ${{ runner.temp }}/areashare-build
+          AREASHARE_SIGN_IDENTITY: AreaShare Release
+          AREASHARE_UNIVERSAL: "1"
+        run: |
+          AREASHARE_VERSION="${GITHUB_REF_NAME#v}" ./build.sh
+          cd "$AREASHARE_BUILD_DIR"
+          codesign --display --requirements - AreaShare.app
+          ditto -c -k --keepParent AreaShare.app "$GITHUB_WORKSPACE/AreaShare-macos.zip"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: AreaShare-macos.zip
+          if-no-files-found: error
+
+  windows:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: windows/go.mod
+      - name: Test
+        working-directory: windows
+        run: |
+          go vet ./...
+          GOOS=windows go vet ./...
+          go test ./...
+      - name: Build
+        working-directory: windows
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          for arch in amd64 arm64; do
+            GOOS=windows GOARCH=$arch go build -trimpath \
+              -ldflags "-H=windowsgui -s -w -X main.buildVersion=$version" \
+              -o "$GITHUB_WORKSPACE/AreaShare-windows-$arch.exe" .
+          done
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: AreaShare-windows-*.exe
+          if-no-files-found: error
+
+  publish:
+    needs: [macos, windows]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          sha256sum AreaShare-macos.zip AreaShare-windows-*.exe > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+          gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --title "AreaShare ${GITHUB_REF_NAME#v}" \
+            --generate-notes AreaShare-macos.zip AreaShare-windows-*.exe SHA256SUMS.txt

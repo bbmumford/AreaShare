@@ -1,0 +1,8 @@
+.DS_Store
+.remember/
+.build/
+.swiftpm/
+*.xcodeproj
+windows/dist/
+*.exe
+.signing-identity

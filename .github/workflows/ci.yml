@@ -1,0 +1,44 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test
+        working-directory: macos
+        run: swift test
+      - name: Build the app
+        working-directory: macos
+        env:
+          AREASHARE_BUILD_DIR: ${{ runner.temp }}/areashare-build
+          AREASHARE_SIGN_IDENTITY: "-"
+        run: ./build.sh
+
+  windows:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: windows/go.mod
+      - name: Test
+        working-directory: windows
+        run: |
+          test -z "$(gofmt -l .)"
+          go vet ./...
+          GOOS=windows go vet ./...
+          go test ./...
+      - name: Build
+        working-directory: windows
+        run: |
+          GOOS=windows GOARCH=amd64 go build -o /dev/null .
+          GOOS=windows GOARCH=arm64 go build -o /dev/null .
