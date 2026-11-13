@@ -144,17 +144,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, FrameV
         saveSettings()
     }
 
-    /// Fits the region to the frontmost ordinary window of another app under
-    /// `point`, as far as that window is on one display.
-    func frameSnapToWindow(at point: CGPoint) -> Bool {
+    /// Every ordinary window of other apps that is on screen, front to back,
+    /// in global points.
+    private func otherWindows() -> [CGRect] {
         guard let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID)
                 as? [[CFString: Any]],
               let primary = NSScreen.screens.first?.frame
-        else { return false }
+        else { return [] }
         let own = ProcessInfo.processInfo.processIdentifier
-        // The list runs front to back and gives rectangles measured from
-        // the top-left of the primary display.
-        let windows: [CGRect] = list.compactMap { entry in
+        // The list gives rectangles measured from the top-left of the
+        // primary display.
+        return list.compactMap { entry in
             guard (entry[kCGWindowLayer] as? Int) == 0, (entry[kCGWindowOwnerPID] as? pid_t) != own,
                   (entry[kCGWindowAlpha] as? Double ?? 1) > 0,
                   let bounds = entry[kCGWindowBounds] as? NSDictionary,
@@ -162,11 +162,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, FrameV
             else { return nil }
             return CGRect(x: rect.minX, y: primary.maxY - rect.maxY, width: rect.width, height: rect.height)
         }
-        guard let window = windowToSnap(at: point, among: windows, metrics: metrics),
-              let screen = bestScreen(for: window, in: screenFrames)
+    }
+
+    /// Fits the region around the windows under `path`, as far as they are
+    /// on one display.
+    func frameSnapToWindows(along path: [CGPoint]) -> Bool {
+        guard let windows = windowsToSnap(along: path, among: otherWindows(), metrics: metrics),
+              let screen = bestScreen(for: windows, in: screenFrames)
         else { return false }
-        setRegion(window.intersection(screen))
+        setRegion(windows.intersection(screen))
         return true
+    }
+
+    /// Other apps' windows, then each display's area clear of the menu bar
+    /// and Dock, so an edge also clicks onto those.
+    func frameAlignmentTargets() -> [CGRect] {
+        otherWindows() + NSScreen.screens.map(\.visibleFrame)
     }
 
     // MARK: Recording
@@ -478,7 +489,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, FrameV
         alert.messageText = "Sharing an area of your screen"
         alert.informativeText = """
             1. Drag the tab on the red frame to move it. Drag the red outline to resize it; hold Shift to keep \
-            its shape. To fit the frame to a window, drag the tab over that window and wiggle it.
+            its shape. An edge clicks onto a window edge it comes close to; hold Command to stop that. To fit the \
+            frame to a window, drag the tab over it and wiggle; wiggle across several windows to take them all.
 
             2. In Teams, Zoom or Meet choose to share a window, and pick the one named AreaShare.
 

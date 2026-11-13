@@ -227,16 +227,23 @@ public struct ShakeDetector {
     private var extreme: CGFloat?
     private var direction: CGFloat = 0
     private var reversals: [Double] = []
+    private var samples: [(point: CGPoint, time: Double)] = []
 
     public init() {}
 
-    /// Records the pointer's x position at `time` (seconds, any epoch) and
-    /// returns true when that completes a wiggle. The detector then starts
-    /// afresh.
-    public mutating func add(x: CGFloat, at time: Double) -> Bool {
+    /// Records the pointer's position at `time` (seconds, any epoch). When
+    /// that completes a wiggle it returns the points the pointer passed
+    /// through while wiggling, and the detector starts afresh; otherwise it
+    /// returns nil.
+    public mutating func add(_ point: CGPoint, at time: Double) -> [CGPoint]? {
+        samples.append((point, time))
+        // Nothing older than a wiggle, plus the stroke leading into it, can
+        // be part of one.
+        samples.removeAll { time - $0.time > duration + 0.25 }
+        let x = point.x
         guard let from = extreme else {
             extreme = x
-            return false
+            return nil
         }
         let delta = x - from
         if direction == 0 {
@@ -244,7 +251,7 @@ public struct ShakeDetector {
                 direction = delta > 0 ? 1 : -1
                 extreme = x
             }
-            return false
+            return nil
         }
         if delta * direction > 0 {
             extreme = x
@@ -254,11 +261,13 @@ public struct ShakeDetector {
             reversals.append(time)
             reversals.removeAll { time - $0 > duration }
             if reversals.count >= reversalsNeeded {
+                let began = reversals[0] - 0.25
+                let path = samples.filter { $0.time >= began }.map(\.point)
                 self = ShakeDetector(like: self)
-                return true
+                return path
             }
         }
-        return false
+        return nil
     }
 
     private init(like other: ShakeDetector) {
@@ -272,4 +281,59 @@ public struct ShakeDetector {
 /// is under `point` and large enough to be a region.
 public func windowToSnap(at point: CGPoint, among windows: [CGRect], metrics: FrameMetrics) -> CGRect? {
     windows.first { $0.contains(point) && $0.width >= metrics.minSize.width && $0.height >= metrics.minSize.height }
+}
+
+/// The smallest rectangle around every window the pointer was over at some
+/// point of `path`: one window if the wiggle stayed on it, several if it
+/// swept across them.
+public func windowsToSnap(along path: [CGPoint], among windows: [CGRect], metrics: FrameMetrics) -> CGRect? {
+    var result: CGRect?
+    for point in path {
+        if let window = windowToSnap(at: point, among: windows, metrics: metrics) {
+            result = result?.union(window) ?? window
+        }
+    }
+    return result
+}
+
+/// `region` with the edges that `zone` moves pulled onto a nearby window
+/// edge, the way windows click together when one is dragged up to another.
+///
+/// `windows` are listed front to back. An edge is only a target if it is
+/// within `threshold` of the dragged edge, runs alongside the region, and is
+/// not covered there by a window in front of it. The result stays inside
+/// `bounds` and no smaller than the metrics' minimum.
+public func aligned(_ region: CGRect, zone: Zone, toEdgesOf windows: [CGRect], within bounds: CGRect,
+                    metrics m: FrameMetrics, threshold: CGFloat = 10) -> CGRect {
+    /// The nearest target coordinate to `value`: an x if `vertical` (the
+    /// edge being dragged is a left or right one), otherwise a y.
+    func target(near value: CGFloat, vertical: Bool) -> CGFloat? {
+        let spanLow = (vertical ? region.minY : region.minX) - threshold
+        let spanHigh = (vertical ? region.maxY : region.maxX) + threshold
+        var best: CGFloat?
+        for (index, window) in windows.enumerated() {
+            let low = max(vertical ? window.minY : window.minX, spanLow)
+            let high = min(vertical ? window.maxY : window.maxX, spanHigh)
+            guard low < high else { continue }
+            for edge in vertical ? [window.minX, window.maxX] : [window.minY, window.maxY] {
+                let distance = abs(edge - value)
+                guard distance <= threshold, best.map({ distance < abs($0 - value) }) ?? true else { continue }
+                let covered = (0..<5).allSatisfy { step in
+                    let along = low + (high - low) * (CGFloat(step) + 0.5) / 5
+                    let point = vertical ? CGPoint(x: edge, y: along) : CGPoint(x: along, y: edge)
+                    return windows[..<index].contains { $0.insetBy(dx: 1, dy: 1).contains(point) }
+                }
+                if !covered { best = edge }
+            }
+        }
+        return best
+    }
+
+    let minW = min(m.minSize.width, region.width), minH = min(m.minSize.height, region.height)
+    var minX = region.minX, maxX = region.maxX, minY = region.minY, maxY = region.maxY
+    if zone.movesLeftEdge, let x = target(near: minX, vertical: true), x >= bounds.minX, maxX - x >= minW { minX = x }
+    if zone.movesRightEdge, let x = target(near: maxX, vertical: true), x <= bounds.maxX, x - minX >= minW { maxX = x }
+    if zone.movesBottomEdge, let y = target(near: minY, vertical: false), y >= bounds.minY, maxY - y >= minH { minY = y }
+    if zone.movesTopEdge, let y = target(near: maxY, vertical: false), y <= bounds.maxY, y - minY >= minH { maxY = y }
+    return CGRect(x: minX, y: minY, width: maxX - minX, height: maxY - minY)
 }

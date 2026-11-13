@@ -22,9 +22,12 @@ enum ShareState: Equatable {
 protocol FrameViewDelegate: AnyObject {
     func frameDragMoved(to region: CGRect)
     func frameDragEnded()
-    /// The tab was wiggled with the pointer at `point`: fit the region to
-    /// the window there. Returns whether there was one.
-    func frameSnapToWindow(at point: CGPoint) -> Bool
+    /// The tab was wiggled, the pointer passing through `path`: fit the
+    /// region around the windows it passed over. Returns whether there were
+    /// any.
+    func frameSnapToWindows(along path: [CGPoint]) -> Bool
+    /// Rectangles whose edges a dragged edge clicks onto, front to back.
+    func frameAlignmentTargets() -> [CGRect]
     func frameContextMenu() -> NSMenu
     /// Every display's rectangle, in global points.
     var screenFrames: [CGRect] { get }
@@ -92,6 +95,8 @@ final class FrameView: NSView {
     private var hover = Zone.none { didSet { if hover != oldValue { refresh() } } }
     private var tracking: NSTrackingArea?
     private var shake = ShakeDetector()
+    /// What a dragged edge can click onto, read once when the drag starts.
+    private var alignmentTargets: [CGRect] = []
     /// True from a snap until the button comes up, so the rest of that
     /// press does not drag the region off the window it just fitted.
     private var snapped = false
@@ -284,22 +289,31 @@ final class FrameView: NSView {
         guard zone != .none else { return }
         drag = Drag(zone: zone, start: layout.region, anchor: point)
         shake = ShakeDetector()
+        alignmentTargets = zone == .move ? [] : delegate?.frameAlignmentTargets() ?? []
         hover = zone
         if zone == .move { NSCursor.closedHand.set() }
     }
 
     override func mouseDragged(with event: NSEvent) {
         guard let drag, let delegate else { return }
-        if drag.zone == .move, shake.add(x: NSEvent.mouseLocation.x, at: event.timestamp),
-           delegate.frameSnapToWindow(at: NSEvent.mouseLocation) {
+        if drag.zone == .move, let path = shake.add(NSEvent.mouseLocation, at: event.timestamp),
+           delegate.frameSnapToWindows(along: path) {
             self.drag = nil
             snapped = true
             hover = .none
             flash()
             return
         }
-        let region = drag.region(cursor: NSEvent.mouseLocation, screens: delegate.screenFrames, metrics: metrics,
-                                 keepAspect: event.modifierFlags.contains(.shift))
+        let keepAspect = event.modifierFlags.contains(.shift)
+        var region = drag.region(cursor: NSEvent.mouseLocation, screens: delegate.screenFrames, metrics: metrics,
+                                 keepAspect: keepAspect)
+        // A dragged edge clicks onto a window edge it comes close to. Not
+        // while keeping the shape, where one edge cannot move alone, and
+        // not with Command held, for placing an edge just beside another.
+        if drag.zone != .move, !keepAspect, !event.modifierFlags.contains(.command),
+           let screen = bestScreen(for: drag.start, in: delegate.screenFrames) {
+            region = aligned(region, zone: drag.zone, toEdgesOf: alignmentTargets, within: screen, metrics: metrics)
+        }
         delegate.frameDragMoved(to: region)
     }
 

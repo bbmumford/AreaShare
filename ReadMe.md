@@ -32,8 +32,8 @@ A conferencing app that shares a window sends that window's own picture, not wha
 ## Using it (macOS)
 
 1. Open **AreaShare** from Applications. The first time, macOS asks for Screen Recording permission: turn AreaShare on under System Settings › Privacy & Security › Screen & System Audio Recording, then choose **Relaunch**. If AreaShare is already turned on there but keeps asking (this happens when you replace it with a differently signed copy, such as one you built yourself), choose **Reset Permission** and turn it on again.
-2. Drag the **tab** to move the frame. Drag the **outline** to resize it: the thick corner pieces resize diagonally, the sides resize one way. Hold **Shift** to keep the shape. The part under the pointer lights up, and the pointer changes, to show what a press will grab.
-3. To fit the frame to a window, drag the tab over that window and **wiggle** it left and right. The frame snaps to the frontmost window under the pointer and flashes. It is a one-time fit: the frame does not follow the window afterwards.
+2. Drag the **tab** to move the frame. Drag the **outline** to resize it: the thick corner pieces resize diagonally, the sides resize one way. Hold **Shift** to keep the shape. An edge you drag clicks onto the edge of a window it comes close to (and onto the menu bar and Dock); hold **Command** to place it freely. The part under the pointer lights up, and the pointer changes, to show what a press will grab.
+3. To fit the frame to a window, drag the tab over that window and **wiggle** it left and right. The frame snaps to the frontmost window under the pointer and flashes. Wiggle across several windows and it takes them all in one frame. It is a one-time fit: the frame does not follow the windows afterwards.
 4. In your meeting choose to share a **window** and pick **AreaShare**.
 
 Right-click the frame, or click the AreaShare icon in the menu bar, for the menu:

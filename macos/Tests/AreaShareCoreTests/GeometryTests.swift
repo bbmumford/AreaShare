@@ -218,7 +218,7 @@ final class ShakeTests: XCTestCase {
             for _ in 0..<steps {
                 x += 4 * direction
                 time += stroke / Double(steps)
-                if detector.add(x: x, at: time) { fired = true }
+                if detector.add(CGPoint(x: x, y: 300), at: time) != nil { fired = true }
             }
         }
         return fired
@@ -259,6 +259,79 @@ final class ShakeTests: XCTestCase {
         XCTAssertEqual(windowToSnap(at: point, among: [palette, front, back], metrics: metrics), front)
         XCTAssertEqual(windowToSnap(at: CGPoint(x: 100, y: 100), among: [palette, front, back], metrics: metrics), back)
         XCTAssertNil(windowToSnap(at: CGPoint(x: 5000, y: 100), among: [palette, front, back], metrics: metrics))
+    }
+}
+
+final class MultiWindowAndAlignmentTests: XCTestCase {
+    let metrics = FrameMetrics()
+    let screen = CGRect(x: 0, y: 0, width: 7680, height: 2160)
+
+    func testWiggleReportsWhereThePointerWent() {
+        var detector = ShakeDetector()
+        var path: [CGPoint]?
+        var x: CGFloat = 500, time = 0.0
+        for swing in 0..<6 {
+            for _ in 0..<15 {
+                x += swing.isMultiple(of: 2) ? 4 : -4
+                time += 0.006
+                if let fired = detector.add(CGPoint(x: x, y: 300), at: time) { path = fired }
+            }
+        }
+        let xs = (path ?? []).map(\.x)
+        XCTAssertGreaterThanOrEqual((xs.max() ?? 0) - (xs.min() ?? 0), 50, "the path covers the width of the wiggle")
+    }
+
+    func testWiggleAcrossTwoWindowsTakesBoth() {
+        let left = CGRect(x: 100, y: 200, width: 900, height: 700)
+        let right = CGRect(x: 1010, y: 300, width: 800, height: 900)
+        let behind = CGRect(x: 0, y: 0, width: 4000, height: 2000)
+        let windows = [left, right, behind]
+        let across = [CGPoint(x: 980, y: 600), CGPoint(x: 1004, y: 600), CGPoint(x: 1030, y: 600)]
+        XCTAssertEqual(windowsToSnap(along: across, among: windows, metrics: metrics), left.union(right).union(behind),
+                       "the gap between the two shows the window behind, which the pointer also crossed")
+        let touching = [CGPoint(x: 980, y: 600), CGPoint(x: 1030, y: 600)]
+        XCTAssertEqual(windowsToSnap(along: touching, among: windows, metrics: metrics), left.union(right))
+        XCTAssertEqual(windowsToSnap(along: [CGPoint(x: 500, y: 600)], among: windows, metrics: metrics), left)
+        XCTAssertNil(windowsToSnap(along: [CGPoint(x: 6000, y: 2100)], among: windows, metrics: metrics))
+    }
+
+    func testDraggedEdgeClicksOntoANearbyWindowEdge() {
+        let window = CGRect(x: 2000, y: 400, width: 1200, height: 800)
+        let region = CGRect(x: 1000, y: 500, width: 994, height: 600) // right edge 6 short of the window's left
+        let snapped = aligned(region, zone: .right, toEdgesOf: [window], within: screen, metrics: metrics)
+        XCTAssertEqual(snapped, CGRect(x: 1000, y: 500, width: 1000, height: 600))
+        // Too far away: left alone.
+        let far = CGRect(x: 1000, y: 500, width: 960, height: 600)
+        XCTAssertEqual(aligned(far, zone: .right, toEdgesOf: [window], within: screen, metrics: metrics), far)
+        // Only the edge being dragged moves.
+        XCTAssertEqual(aligned(region, zone: .left, toEdgesOf: [window], within: screen, metrics: metrics), region)
+    }
+
+    func testCornerDragAlignsBothEdges() {
+        let window = CGRect(x: 2000, y: 400, width: 1200, height: 800)
+        let region = CGRect(x: 2004, y: 300, width: 1190, height: 893) // top-right corner near the window's
+        XCTAssertEqual(aligned(region, zone: .topRight, toEdgesOf: [window], within: screen, metrics: metrics),
+                       CGRect(x: 2004, y: 300, width: 1196, height: 900))
+    }
+
+    func testDoesNotAlignToAnEdgeThatIsFarAlongOrCovered() {
+        let window = CGRect(x: 2000, y: 400, width: 1200, height: 800)
+        // Same x, but the window is nowhere near the region vertically.
+        let elsewhere = CGRect(x: 1000, y: 1500, width: 994, height: 300)
+        XCTAssertEqual(aligned(elsewhere, zone: .right, toEdgesOf: [window], within: screen, metrics: metrics), elsewhere)
+        // The window's left edge is hidden behind a window in front of it.
+        let cover = CGRect(x: 1500, y: 0, width: 1000, height: 2000)
+        let region = CGRect(x: 1000, y: 500, width: 994, height: 600)
+        XCTAssertEqual(aligned(region, zone: .right, toEdgesOf: [cover, window], within: screen, metrics: metrics), region)
+    }
+
+    func testAlignmentNeverLeavesTheDisplayOrGoesBelowTheMinimum() {
+        let offscreen = CGRect(x: 7000, y: 0, width: 686, height: 900) // right edge 6 past the display
+        let region = CGRect(x: 6000, y: 100, width: 1680, height: 600)
+        XCTAssertEqual(aligned(region, zone: .right, toEdgesOf: [offscreen], within: screen, metrics: metrics), region)
+        let narrow = CGRect(x: 1000, y: 500, width: 165, height: 600)
+        let close = CGRect(x: 400, y: 400, width: 758, height: 800) // right edge at 1158, 7 from the region's right
+        XCTAssertEqual(aligned(narrow, zone: .right, toEdgesOf: [close], within: screen, metrics: metrics), narrow)
     }
 }
 
